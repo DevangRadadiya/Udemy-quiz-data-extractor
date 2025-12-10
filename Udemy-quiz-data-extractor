@@ -1,0 +1,186 @@
+// Quiz Data Extractor for Browser Console
+// Usage: Copy this entire script and paste it into your browser's console (F12)
+
+(function() {
+  console.log('🔍 Starting quiz data extraction...');
+  
+  const quizData = [];
+  
+  // Find all question panels
+  const questionPanels = document.querySelectorAll('.result-pane--question-result-pane--sIcOh');
+  
+  console.log(`📝 Found ${questionPanels.length} questions`);
+  
+  // Helper function to extract text with code blocks preserved
+  function extractTextWithCode(element) {
+    if (!element) return '';
+    
+    let result = '';
+    
+    function processNode(node) {
+      if (node.nodeType === Node.TEXT_NODE) {
+        result += node.textContent;
+      } else if (node.nodeType === Node.ELEMENT_NODE) {
+        if (node.tagName === 'CODE') {
+          result += '`' + node.textContent + '`';
+        } else if (node.tagName === 'PRE') {
+          result += '\n```\n' + node.textContent + '\n```\n';
+        } else if (node.tagName === 'BR') {
+          result += '\n';
+        } else if (node.tagName === 'P') {
+          if (result && !result.endsWith('\n\n')) {
+            result += '\n\n';
+          }
+          node.childNodes.forEach(processNode);
+          result += '\n\n';
+        } else {
+          node.childNodes.forEach(processNode);
+        }
+      }
+    }
+    
+    element.childNodes.forEach(processNode);
+    return result.trim();
+  }
+  
+  questionPanels.forEach((panel, index) => {
+    try {
+      // Extract question number and status
+      const questionHeader = panel.querySelector('.result-pane--pane-title--f-2kd');
+      const statusLabel = panel.querySelector('[data-purpose="question-result-header-status-label"]');
+      const questionNumber = questionHeader?.textContent.match(/Question \d+/)?.[0] || `Question ${index + 1}`;
+      const status = statusLabel?.textContent.trim() || 'Unknown';
+      
+      // Extract question text with code blocks
+      const questionPrompt = panel.querySelector('#question-prompt');
+      const questionText = extractTextWithCode(questionPrompt) || 'No question text found';
+      
+      // Extract domain
+      const domainElement = panel.querySelector('[data-purpose="domain-pane"] .ud-text-md');
+      const domain = domainElement?.textContent.trim() || 'No domain specified';
+      
+      // Extract overall explanation with code blocks
+      const overallExplanation = panel.querySelector('#overall-explanation');
+      const overallExplanationText = extractTextWithCode(overallExplanation) || 'No overall explanation';
+      
+      // Extract all answers
+      const answerPanes = panel.querySelectorAll('.result-pane--answer-result-pane--Niazi');
+      const answers = [];
+      let correctAnswersCount = 0;
+      
+      answerPanes.forEach((answerPane, ansIndex) => {
+        const answerBody = answerPane.querySelector('[data-purpose="answer-body"]');
+        const answerTextElement = answerBody?.querySelector('#answer-text');
+        const answerText = extractTextWithCode(answerTextElement) || `Answer ${ansIndex + 1}`;
+        
+        // Multiple ways to detect correct answer
+        const isCorrectClass = answerPane.classList.contains('answer-result-pane--answer-correct--PLOEU');
+        const feedbackDiv = answerPane.querySelector('.answer-result-pane--answer-feedback--bHmbH');
+        const hasFeedbackCorrect = feedbackDiv?.classList.contains('answer-result-pane--feedback-correct--GuUuK');
+        const hasSuccessIcon = answerPane.querySelector('.ud-icon-success') !== null;
+        const hasCorrectLabel = answerPane.querySelector('[data-purpose="answer-result-header-user-label"]')?.textContent.toLowerCase().includes('correct');
+        
+        // An answer is correct if any of these conditions are true
+        const isCorrect = isCorrectClass || hasFeedbackCorrect || (hasSuccessIcon && hasCorrectLabel);
+        
+        if (isCorrect) correctAnswersCount++;
+        
+        // Check if this was the user's answer
+        const userAnswerLabel = answerPane.querySelector('[data-purpose="answer-result-header-user-label"]');
+        const isUserAnswer = !!userAnswerLabel;
+        
+        // Extract explanation for this answer with code blocks
+        const explanationElement = answerPane.querySelector('#question-explanation');
+        const explanation = extractTextWithCode(explanationElement) || 'No explanation';
+        
+        answers.push({
+          answer: answerText,
+          isCorrect: isCorrect,
+          isUserAnswer: isUserAnswer,
+          explanation: explanation
+        });
+      });
+      
+      // Determine question type based on correct answers count
+      // Also check for checkbox/radio icons
+      const firstAnswerIcon = panel.querySelector('[data-purpose="answer-result-body-selection-icon"] use');
+      const iconHref = firstAnswerIcon?.getAttribute('xlink:href') || '';
+      const hasCheckboxIcon = iconHref.includes('checkbox');
+      const hasRadioIcon = iconHref.includes('radio');
+      
+      let questionType = 'Unknown';
+      if (correctAnswersCount > 1 || hasCheckboxIcon) {
+        questionType = 'Multi-Select';
+      } else if (correctAnswersCount === 1 || hasRadioIcon) {
+        questionType = 'Multiple Choice';
+      }
+      
+      // Get user's answers and correct answers
+      const userAnswers = answers.filter(a => a.isUserAnswer).map(a => a.answer);
+      const correctAnswers = answers.filter(a => a.isCorrect).map(a => a.answer);
+      
+      // Add to quiz data
+      quizData.push({
+        questionNumber: questionNumber,
+        questionType: questionType,
+        status: status,
+        question: questionText,
+        domain: domain,
+        yourAnswer: userAnswers.length > 0 ? (userAnswers.length === 1 ? userAnswers[0] : userAnswers) : null,
+        correctAnswer: correctAnswers.length > 0 ? (correctAnswers.length === 1 ? correctAnswers[0] : correctAnswers) : null,
+        allOptions: answers.map(a => ({
+          option: a.answer,
+          isCorrect: a.isCorrect,
+          explanation: a.explanation
+        })),
+        overallExplanation: overallExplanationText
+      });
+      
+      console.log(`✅ Extracted: ${questionNumber} (${questionType}) - Correct: ${correctAnswersCount}`);
+      
+    } catch (error) {
+      console.error(`❌ Error extracting question ${index + 1}:`, error);
+    }
+  });
+  
+  // Generate JSON file
+  const jsonData = JSON.stringify(quizData, null, 2);
+  const jsonBlob = new Blob([jsonData], { type: 'application/json' });
+  const jsonUrl = URL.createObjectURL(jsonBlob);
+  
+  // Download JSON
+  const downloadJSON = document.createElement('a');
+  downloadJSON.href = jsonUrl;
+  downloadJSON.download = `quiz-data-${Date.now()}.json`;
+  document.body.appendChild(downloadJSON);
+  downloadJSON.click();
+  document.body.removeChild(downloadJSON);
+  
+  console.log('\n✨ Extraction complete!\n');
+  console.log(`📊 Total questions extracted: ${quizData.length}`);
+  console.log(`   - Multiple Choice: ${quizData.filter(q => q.questionType === 'Multiple Choice').length}`);
+  console.log(`   - Multi-Select: ${quizData.filter(q => q.questionType === 'Multi-Select').length}`);
+  console.log('\n💾 Downloaded: quiz-data.json\n');
+  
+  console.log('🎉 File downloaded successfully!');
+  console.log('\n📋 Data Structure:');
+  console.log('  • questionNumber: Question ID');
+  console.log('  • questionType: Multiple Choice / Multi-Select');
+  console.log('  • status: Correct / Incorrect');
+  console.log('  • question: The question text');
+  console.log('  • domain: The objective/domain');
+  console.log('  • yourAnswer: Your answer (null if not answered)');
+  console.log('  • correctAnswer: The correct answer(s)');
+  console.log('  • allOptions: Array of all options with explanations');
+  console.log('  • overallExplanation: Overall explanation');
+  
+  console.log('\nSample question summary:');
+  console.table(quizData.slice(0, 3).map(q => ({
+    Question: q.questionNumber,
+    Type: q.questionType,
+    Status: q.status,
+    'Your Answer': q.yourAnswer ? (Array.isArray(q.yourAnswer) ? q.yourAnswer.join(', ') : q.yourAnswer) : 'Not answered',
+    'Correct Answer': q.correctAnswer ? (Array.isArray(q.correctAnswer) ? q.correctAnswer.join(', ') : q.correctAnswer) : 'Unknown'
+  })));
+  
+})();
